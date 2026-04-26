@@ -1,12 +1,5 @@
 {
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api" }
-  ],
-  "functions": {
-    "api/index.js": {
-      "runtime": "nodejs22.x"
-    }
-  },
-  "buildCommand": "",
-  "outputDirectory": ""
+  ]
 }

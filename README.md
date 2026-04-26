@@ -35,7 +35,8 @@ src/
 │   ├── init.js                  ← CREATE TABLE IF NOT EXISTS (all 4 tables)
 │   ├── device.js                ← upsertDevice()
 │   ├── notification.js          ← insertNotification(), getNotifications(), getStats()
-│   └── payment.js               ← createPaymentExpectation(), reserveUniqueAmount(), etc.
+│   ├── payment.js               ← createPaymentExpectation(), reserveUniqueAmount(), etc.
+│   └── turso-adapter.js         ← D1-compatible wrapper for Turso/libSQL (Vercel)
 │
 ├── handlers/
 │   ├── notification.js          ← /health /webhook /test /notifications /devices /stats
@@ -43,6 +44,9 @@ src/
 │
 └── services/
     └── payment-matcher.js       ← checkPaymentMatch(), signature generation, callback firing
+
+api/
+└── index.js                     ← Vercel serverless function entry point
 ```
 
 ## Getting Started
@@ -131,9 +135,74 @@ curl -X POST https://your-worker.workers.dev/migrate \
 
 This is safe to call multiple times — it uses `CREATE TABLE IF NOT EXISTS`.
 
+## Vercel Deployment
+
+Vercel uses **Turso** (SQLite-compatible) as the database instead of Cloudflare D1.
+All SQL queries remain identical — a D1-compatible adapter handles the translation.
+
+### 1. Create a Turso database
+
+```bash
+# Install Turso CLI
+curl -sSfL https://get.tur.so/install.sh | bash
+
+# Sign up & login
+turso auth signup
+
+# Create database
+turso db create qris-eventhub
+
+# Get connection URL
+turso db show qris-eventhub --url
+# → libsql://qris-eventhub-username.turso.io
+
+# Create auth token
+turso db tokens create qris-eventhub
+# → eyJhbGciOi...
+```
+
+### 2. Set environment variables in Vercel
+
+Go to **Vercel Dashboard → Project → Settings → Environment Variables** and add:
+
+| Variable | Value |
+|----------|-------|
+| `TURSO_DATABASE_URL` | `libsql://qris-eventhub-username.turso.io` |
+| `TURSO_AUTH_TOKEN` | `eyJhbGciOi...` |
+| `API_KEY` | Your API key |
+| `CALLBACK_SECRET` | Your callback signature secret |
+
+### 3. Deploy
+
+```bash
+# Install Vercel CLI
+npm i -g vercel
+
+# Deploy
+vercel --prod
+```
+
+### 4. Run migration
+
+```bash
+curl -X POST https://your-project.vercel.app/api/migrate \
+  -H "x-api-key: YOUR_API_KEY"
+```
+
+### Vercel vs Cloudflare — URL differences
+
+| Cloudflare Worker | Vercel |
+|-------------------|--------|
+| `POST /webhook` | `POST /api/webhook` |
+| `POST /migrate` | `POST /api/migrate` |
+| `GET /health` | `GET /api/health` |
+| `POST /qris/generate-for-order` | `POST /api/qris/generate-for-order` |
+
 ## API Overview
 
 > Provide `X-API-Key: ${API_KEY}` on every call except `/health` when the key is configured.
+>
+> **Vercel:** All paths are prefixed with `/api` (e.g. `/api/webhook` instead of `/webhook`).
 
 ### Core endpoints
 

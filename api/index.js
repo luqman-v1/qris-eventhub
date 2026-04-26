@@ -3,10 +3,10 @@ const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 // Use Turso wrapper instead of local sqlite3 to support Vercel deployment!
-const sqlite3 = require('../src/db/turso-sqlite.cjs');
+const sqlite3 = require('../src/db/turso-sqlite.js');
 const path = require('path');
 const fs = require('fs');
-const qrisIntegration = require('./qris-integration.cjs');
+const qrisIntegration = require('./qris-integration.js');
 require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 
 const app = express();

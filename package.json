@@ -1,11 +1,11 @@
 {
   "name": "qris-eventhub",
   "version": "1.0.0",
+  "main": "api/index.js",
   "description": "Backend server for Android Notification Listener app",
-  "type": "module",
   "scripts": {
-    "express:start": "node api/index.cjs",
-    "express:dev": "nodemon api/index.cjs",
+    "express:start": "node api/index.js",
+    "express:dev": "nodemon api/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",

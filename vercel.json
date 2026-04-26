@@ -1,8 +1,5 @@
 {
-  "builds": [
-    { "src": "api/index.cjs", "use": "@vercel/node" }
-  ],
   "rewrites": [
-    { "source": "/(.*)", "destination": "/api/index.cjs" }
+    { "source": "/(.*)", "destination": "/api/index.js" }
   ]
 }

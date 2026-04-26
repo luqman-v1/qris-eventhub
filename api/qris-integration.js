@@ -5,7 +5,7 @@
  * It provides endpoints for QRIS conversion and WooCommerce integration.
  */
 
-const QRISConverter = require('./qris-converter.cjs');
+const QRISConverter = require('./qris-converter.js');
 
 /**
  * Setup QRIS routes for the existing Express app

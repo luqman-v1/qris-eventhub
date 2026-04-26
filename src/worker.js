@@ -2,13 +2,16 @@
 // Import QRIS converter functionality
 import { QRISConverter } from './qris-converter.js';
 
+// Track whether tables have been initialized in this isolate
+let tablesInitialized = false;
+
 export default {
   async fetch(request, env, ctx) {
-    return await handleRequest(request, env);
+    return await handleRequest(request, env, ctx);
   },
 };
 
-async function handleRequest(request, env) {
+async function handleRequest(request, env, ctx) {
   const url = new URL(request.url);
   const pathname = url.pathname;
   const method = request.method;
@@ -39,11 +42,14 @@ async function handleRequest(request, env) {
     }
   }
 
-  // Initialize database tables if needed
-  try {
-    await initializeTables(env.DB);
-  } catch (error) {
-    console.error('Error initializing tables:', error);
+  // Initialize database tables only once per isolate lifetime
+  if (!tablesInitialized) {
+    try {
+      await initializeTables(env.DB);
+      tablesInitialized = true;
+    } catch (error) {
+      console.error('Error initializing tables:', error);
+    }
   }
 
   // Route handling
@@ -56,7 +62,7 @@ async function handleRequest(request, env) {
         break;
       case '/webhook':
         if (method === 'POST') {
-          response = await handleWebhook(request, env);
+          response = await handleWebhook(request, env, ctx);
         } else {
           response = createJsonResponse({ success: false, error: 'Method not allowed' }, 405, corsHeaders);
         }
@@ -111,21 +117,9 @@ async function handleRequest(request, env) {
           response = createJsonResponse({ success: false, error: 'Method not allowed' }, 405, corsHeaders);
         }
         break;
-      // WooCommerce endpoints
+      // QRIS utilities
       default:
-        if (pathname.startsWith('/woocommerce/payment-status/')) {
-          if (method === 'GET') {
-            response = await handleWooCommercePaymentStatus(request, env);
-          } else {
-            response = createJsonResponse({ success: false, error: 'Method not allowed' }, 405, corsHeaders);
-          }
-        } else if (pathname === '/woocommerce/payment-webhook') {
-          if (method === 'POST') {
-            response = await handleWooCommercePaymentWebhook(request, env);
-          } else {
-            response = createJsonResponse({ success: false, error: 'Method not allowed' }, 405, corsHeaders);
-          }
-        } else if (pathname.startsWith('/qris/unique-amount/')) {
+        if (pathname.startsWith('/qris/unique-amount/')) {
           if (method === 'GET') {
             response = await handleQRISUniqueAmount(request, env);
           } else {
@@ -237,7 +231,7 @@ async function handleHealth() {
   });
 }
 
-async function handleWebhook(request, env) {
+async function handleWebhook(request, env, ctx) {
   try {
     const body = await request.json();
     console.log('Received webhook data:', JSON.stringify(body, null, 2));
@@ -313,8 +307,14 @@ async function handleWebhook(request, env) {
       });
 
       // Enhanced: Check for payment matches if amount detected
+      // Run this in the background using ctx.waitUntil so it doesn't block the response
       if (amountDetected) {
-        await checkPaymentMatch(env.DB, text, title, bigText, amountDetected, env);
+        if (ctx && ctx.waitUntil) {
+          ctx.waitUntil(checkPaymentMatch(env.DB, text, title, bigText, amountDetected, env).catch(e => console.error('Background payment match error:', e)));
+        } else {
+          // Fallback if ctx is missing for some reason
+          await checkPaymentMatch(env.DB, text, title, bigText, amountDetected, env);
+        }
       }
 
       return createJsonResponse({
@@ -541,19 +541,6 @@ async function checkPaymentMatch(db, text, title, bigText, amountDetected, env) 
           SET status = 'completed', completed_at = ? 
           WHERE id = ?
         `).bind(new Date().toISOString(), matchedExpectation.id).run();
-        
-        // Notify WooCommerce if callback URL is provided
-        if (matchedExpectation.callback_url) {
-          await notifyWooCommerce(matchedExpectation.callback_url, {
-            order_reference: matchedExpectation.order_reference,
-            amount: amountDetected,
-            expected_amount: matchedExpectation.expected_amount,
-            status: 'completed',
-            notification_text: text,
-            match_type: matchType,
-            timestamp: new Date().toISOString()
-          }, env);
-        }
       } else {
         console.error(`❌ Amount mismatch after normalization! Expected: ${normalizedExpected}, Detected: ${normalizedDetected}`);
       }
@@ -563,36 +550,6 @@ async function checkPaymentMatch(db, text, title, bigText, amountDetected, env) 
     
   } catch (error) {
     console.error('Error in payment matching:', error);
-  }
-}
-
-/**
- * Notify WooCommerce about payment completion
- */
-async function notifyWooCommerce(callbackUrl, paymentData, env) {
-  try {
-    const response = await fetch(callbackUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Source': 'NotificationListener-QRIS',
-        'X-API-Key': env?.API_KEY || 'your-secret-api-key'
-      },
-      body: JSON.stringify(paymentData)
-    });
-    
-    console.log(`WooCommerce notification sent: ${response.status}`);
-    
-    if (!response.ok) {
-      const responseText = await response.text();
-      console.error(`WooCommerce notification error response: ${responseText}`);
-    } else {
-      const responseText = await response.text();
-      console.log(`WooCommerce notification response: ${responseText}`);
-    }
-    
-  } catch (error) {
-    console.error('Failed to notify WooCommerce:', error.message);
   }
 }
 
@@ -892,179 +849,6 @@ async function handleQRISGenerateForOrder(request, env) {
     return createJsonResponse({
       success: false,
       error: error.message
-    }, 500);
-  }
-}
-
-/**
- * Handle WooCommerce payment status check
- */
-async function handleWooCommercePaymentStatus(request, env) {
-  try {
-    const url = new URL(request.url);
-    const pathParts = url.pathname.split('/');
-    const orderRef = pathParts[pathParts.length - 1];
-    const timeoutMinutes = url.searchParams.get('timeout') || 15;
-    
-    const timeoutDate = new Date(Date.now() - timeoutMinutes * 60 * 1000).toISOString();
-    
-    // First, check if there's a payment expectation for this order
-    const expectation = await env.DB.prepare(`
-      SELECT * FROM payment_expectations 
-      WHERE order_reference = ? 
-      AND created_at > ?
-      ORDER BY created_at DESC LIMIT 1
-    `).bind(orderRef, timeoutDate).first();
-    
-    if (!expectation) {
-      return createJsonResponse({
-        success: true,
-        payment_found: false,
-        error: 'No payment expectation found for this order',
-        order_reference: orderRef
-      });
-    }
-    
-    // If payment expectation already completed, return success
-    if (expectation.status === 'completed') {
-      return createJsonResponse({
-        success: true,
-        payment_found: true,
-        amount: expectation.expected_amount,
-        status: 'completed',
-        completed_at: expectation.completed_at,
-        order_reference: orderRef
-      });
-    }
-    
-    // Search for payment notifications matching both order reference AND expected amount
-    const normalizedExpectedAmount = parseInt(expectation.expected_amount || expectation.unique_amount, 10).toString();
-    
-    const notification = await env.DB.prepare(`
-      SELECT * FROM notifications 
-      WHERE (text LIKE ? OR title LIKE ? OR big_text LIKE ?) 
-      AND (amount_detected = ? OR CAST(amount_detected AS INTEGER) = ?)
-      AND created_at > ?
-      ORDER BY created_at DESC LIMIT 1
-    `).bind(
-      `%${orderRef}%`, 
-      `%${orderRef}%`, 
-      `%${orderRef}%`,
-      expectation.expected_amount || expectation.unique_amount,
-      normalizedExpectedAmount,
-      timeoutDate
-    ).first();
-    
-    if (notification) {
-      // Payment found and amount matches! Mark expectation as completed
-      await env.DB.prepare(`
-        UPDATE payment_expectations 
-        SET status = 'completed', completed_at = ? 
-        WHERE id = ?
-      `).bind(new Date().toISOString(), expectation.id).run();
-      
-      console.log(`✅ Payment confirmed via status check! Order: ${orderRef}, Amount: ${expectation.expected_amount}`);
-      
-      const normalizedNotificationAmount = parseInt(notification.amount_detected, 10).toString();
-      const normalizedExpectedAmount = parseInt(expectation.expected_amount || expectation.unique_amount, 10).toString();
-      
-      return createJsonResponse({
-        success: true,
-        payment_found: true,
-        amount: notification.amount_detected,
-        expected_amount: expectation.expected_amount || expectation.unique_amount,
-        amount_matches: normalizedNotificationAmount === normalizedExpectedAmount,
-        notification_text: notification.text,
-        timestamp: notification.created_at,
-        order_reference: orderRef,
-        status: 'completed'
-      });
-    } else {
-      // No matching payment found yet
-      return createJsonResponse({
-        success: true,
-        payment_found: false,
-        expected_amount: expectation.expected_amount,
-        order_reference: orderRef,
-        status: 'pending',
-        message: 'Payment not yet detected or amount does not match'
-      });
-    }
-    
-  } catch (error) {
-    console.error('Payment status check error:', error);
-    return createJsonResponse({
-      success: false,
-      error: 'Database error: ' + error.message
-    }, 500);
-  }
-}
-
-/**
- * Handle WooCommerce payment webhook registration
- */
-async function handleWooCommercePaymentWebhook(request, env) {
-  try {
-    const body = await request.json();
-    const { orderRef, expectedAmount, callbackUrl, useUniqueAmount = true } = body;
-    
-    if (!orderRef || !expectedAmount) {
-      return createJsonResponse({
-        success: false,
-        error: 'Missing required fields: orderRef, expectedAmount'
-      }, 400);
-    }
-    
-    let uniqueAmount = expectedAmount;
-    
-    // Generate unique amount if requested
-    if (useUniqueAmount) {
-      try {
-        uniqueAmount = await generateUniqueAmount(env.DB, orderRef);
-        console.log(`🎲 Generated unique amount ${uniqueAmount} for order ${orderRef} (original: ${expectedAmount})`);
-      } catch (uniqueErr) {
-        console.error('Failed to generate unique amount:', uniqueErr);
-        return createJsonResponse({
-          success: false,
-          error: 'Failed to generate unique amount: ' + uniqueErr.message
-        }, 500);
-      }
-    }
-    
-    // Calculate combined amount (original + unique)
-    const combinedAmount = useUniqueAmount ? (parseInt(expectedAmount) + parseInt(uniqueAmount)).toString() : expectedAmount;
-    
-    // Store payment expectation with combined amount as expected_amount
-    const result = await env.DB.prepare(`
-      INSERT OR REPLACE INTO payment_expectations (
-        order_reference, expected_amount, unique_amount, original_amount, callback_url, created_at, status
-      ) VALUES (?, ?, ?, ?, ?, ?, 'pending')
-    `).bind(orderRef, combinedAmount, uniqueAmount, expectedAmount, callbackUrl, new Date().toISOString()).run();
-    
-    console.log(`Payment expectation registered: ${orderRef} - Combined: ${combinedAmount}, Unique: ${uniqueAmount}, Original: ${expectedAmount}`);
-    
-    const response = {
-      success: true,
-      message: 'Payment expectation registered',
-      order_reference: orderRef,
-      expected_amount: combinedAmount,
-      id: result.meta?.last_row_id
-    };
-    
-    if (useUniqueAmount) {
-      response.original_amount = expectedAmount;
-      response.unique_amount = uniqueAmount;
-      response.combined_amount = combinedAmount;
-      response.amount_type = 'combined';
-    }
-    
-    return createJsonResponse(response);
-    
-  } catch (error) {
-    console.error('Payment webhook error:', error);
-    return createJsonResponse({
-      success: false,
-      error: 'Internal server error'
     }, 500);
   }
 }

@@ -1,5 +1,5 @@
 import { CORS_HEADERS } from './constants.js';
-import { jsonError } from './helpers.js';
+import { jsonResponse, jsonError } from './helpers.js';
 import { initializeTables } from './db/init.js';
 import {
   handleHealth,
@@ -31,21 +31,6 @@ const ROUTES = {
   '/qris/generate-for-order': { POST: handleQRISGenerateForOrder },
 };
 
-// ─── DB init guard ─────────────────────────────────────────────────────────
-// Initialise tables once per isolate lifetime (Cloudflare Workers model)
-
-let tablesInitialized = false;
-
-async function ensureTablesExist(db) {
-  if (tablesInitialized) return;
-  try {
-    await initializeTables(db);
-    tablesInitialized = true;
-  } catch (err) {
-    console.error('DB init error:', err);
-  }
-}
-
 // ─── Worker entry point ────────────────────────────────────────────────────
 
 export default {
@@ -66,8 +51,6 @@ export default {
       }
     }
 
-    await ensureTablesExist(env.DB);
-
     try {
       const response = await route(pathname, method, request, env, ctx);
 
@@ -87,6 +70,12 @@ export default {
 // ─── Router ────────────────────────────────────────────────────────────────
 
 async function route(pathname, method, request, env, ctx) {
+  // Migration endpoint — run once after deploy
+  if (pathname === '/migrate') {
+    if (method !== 'POST') return jsonError('Method not allowed', 405);
+    return handleMigrate(env);
+  }
+
   // Named routes
   if (ROUTES[pathname]) {
     const handler = ROUTES[pathname][method];
@@ -103,4 +92,21 @@ async function route(pathname, method, request, env, ctx) {
   }
 
   return jsonError('Endpoint not found', 404);
+}
+
+// ─── Migration handler ────────────────────────────────────────────────────
+
+async function handleMigrate(env) {
+  try {
+    await initializeTables(env.DB);
+    console.log('✅ Database migration completed');
+    return jsonResponse({
+      success:   true,
+      message:   'Database migration completed successfully',
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error('❌ Migration failed:', err);
+    return jsonError('Migration failed: ' + err.message, 500);
+  }
 }

@@ -120,6 +120,17 @@ npm run cf:dev      # local dev with Wrangler
 npm run cf:deploy   # deploy to Cloudflare
 ```
 
+### Run migration (once after first deploy)
+
+Tables are **not** created automatically. Run the migration endpoint once after deploying:
+
+```bash
+curl -X POST https://your-worker.workers.dev/migrate \
+  -H "x-api-key: YOUR_API_KEY"
+```
+
+This is safe to call multiple times — it uses `CREATE TABLE IF NOT EXISTS`.
+
 ## API Overview
 
 > Provide `X-API-Key: ${API_KEY}` on every call except `/health` when the key is configured.
@@ -128,6 +139,7 @@ npm run cf:deploy   # deploy to Cloudflare
 
 | Purpose | Method & Path | Notes |
 |---------|---------------|-------|
+| Migrate | `POST /migrate` | Create database tables. Run once after deploy. |
 | Health  | `GET /health` | Unauthenticated heartbeat. |
 | Webhook | `POST /webhook` | Notification ingest. Requires `deviceId` and `packageName`. |
 | Test    | `POST /test` | Echo endpoint for integration checks. |
@@ -240,7 +252,7 @@ if (expected !== signature) {
 
 ## Database Schema
 
-Tables are provisioned automatically on startup (see `src/db/init.js` and `schema.sql`):
+Tables are created via `POST /migrate` (see `src/db/init.js`). Run once after first deploy:
 
 | Table | Purpose |
 |-------|---------|

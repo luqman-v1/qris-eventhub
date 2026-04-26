@@ -1,10 +1,11 @@
 /**
  * Create all required database tables if they do not exist.
+ * Uses D1 batch API to execute all statements in a single round-trip.
  * @param {D1Database} db
  */
 export async function initializeTables(db) {
-  const tables = [
-    `CREATE TABLE IF NOT EXISTS notifications (
+  const statements = [
+    db.prepare(`CREATE TABLE IF NOT EXISTS notifications (
       id              INTEGER PRIMARY KEY AUTOINCREMENT,
       device_id       TEXT NOT NULL,
       package_name    TEXT NOT NULL,
@@ -19,15 +20,15 @@ export async function initializeTables(db) {
       amount_detected TEXT,
       extras          TEXT,
       created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`,
-    `CREATE TABLE IF NOT EXISTS devices (
+    )`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS devices (
       id                   INTEGER PRIMARY KEY AUTOINCREMENT,
       device_id            TEXT UNIQUE NOT NULL,
       last_seen            DATETIME DEFAULT CURRENT_TIMESTAMP,
       total_notifications  INTEGER DEFAULT 0,
       created_at           DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`,
-    `CREATE TABLE IF NOT EXISTS payment_expectations (
+    )`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS payment_expectations (
       id               INTEGER PRIMARY KEY AUTOINCREMENT,
       order_reference  TEXT UNIQUE NOT NULL,
       expected_amount  TEXT NOT NULL,
@@ -37,18 +38,16 @@ export async function initializeTables(db) {
       status           TEXT DEFAULT 'pending',
       created_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
       completed_at     DATETIME
-    )`,
-    `CREATE TABLE IF NOT EXISTS unique_amounts (
+    )`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS unique_amounts (
       id               INTEGER PRIMARY KEY AUTOINCREMENT,
       unique_amount    TEXT UNIQUE NOT NULL,
       order_reference  TEXT,
       status           TEXT DEFAULT 'used',
       created_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
       expires_at       DATETIME
-    )`,
+    )`),
   ];
 
-  for (const sql of tables) {
-    await db.prepare(sql).run();
-  }
+  await db.batch(statements);
 }

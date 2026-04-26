@@ -51,31 +51,36 @@ export async function handleWebhook(request, env, ctx) {
 
   const timestamp = new Date().toISOString();
 
-  // Device upsert is non-fatal
-  await upsertDevice(env.DB, deviceId, timestamp).catch(err =>
-    console.error('Device upsert failed:', err),
-  );
+  // Run device upsert and notification insert in parallel.
+  // Device upsert is non-fatal — its failure is caught and logged without affecting the insert.
+  const [, insertResult] = await Promise.all([
+    upsertDevice(env.DB, deviceId, timestamp).catch(err =>
+      console.error('Device upsert failed:', err),
+    ),
+    insertNotification(env.DB, {
+      deviceId, packageName, appName, postedAt,
+      title, text, subText, bigText,
+      channelId, notificationId, amountDetected, extras,
+    }),
+  ]);
 
-  const result = await insertNotification(env.DB, {
-    deviceId, packageName, appName, postedAt,
-    title, text, subText, bigText,
-    channelId, notificationId, amountDetected, extras,
-  });
+  console.log(`Notification #${insertResult.meta?.last_row_id} from ${deviceId} (${packageName})`);
 
-  console.log(`Notification #${result.meta?.last_row_id} from ${deviceId} (${packageName})`);
-
-  // Payment matching runs in background — doesn't block the response
+  // Payment matching runs fully in the background — NEVER blocks the response.
   if (amountDetected) {
     const matchTask = checkPaymentMatch(env.DB, { text, title, bigText, amountDetected }, env.CALLBACK_SECRET)
       .catch(err => console.error('Background payment match error:', err));
 
-    ctx?.waitUntil ? ctx.waitUntil(matchTask) : await matchTask;
+    if (ctx?.waitUntil) {
+      ctx.waitUntil(matchTask);
+    }
+    // If no ctx.waitUntil (e.g. local dev), fire-and-forget — do NOT await.
   }
 
   return jsonResponse({
     success:   true,
     message:   'Notification received successfully',
-    id:        result.meta?.last_row_id,
+    id:        insertResult.meta?.last_row_id,
     timestamp,
   });
 }

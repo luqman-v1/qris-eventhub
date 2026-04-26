@@ -1,0 +1,10 @@
+name = "qris-eventhub"
+main = "src/worker.js"
+compatibility_date = "2024-12-01"
+
+# D1 Database binding — replace <your database id> after running:
+#   npm run cf:db:create
+[[d1_databases]]
+binding = "DB"
+database_name = "notification-listener-db"
+database_id = "46114a56-76cb-4fb3-95f4-512b984330ab"

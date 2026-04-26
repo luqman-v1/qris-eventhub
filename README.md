@@ -2,6 +2,16 @@
 
 Backend service for collecting Android notifications, storing them in SQLite / Cloudflare D1, and matching QRIS payments for e‑commerce workflows.
 
+> **Fork Notice**
+> This project is forked from [Wimboro/qris-eventhub](https://github.com/Wimboro/qris-eventhub).
+> It has been **heavily modified** and is maintained independently. Major changes include:
+> - Refactored into modular file structure (`handlers/`, `db/`, `services/`)
+> - Added SHA-256 callback signature verification (`X-QRIS-Signature`)
+> - Added 66+ unit tests with Vitest
+> - Fixed D1 `undefined` binding errors
+> - Cleaned up response helpers, routing, and error handling
+>
+> No pull request is planned to the upstream repo. All credit to the original author for the foundation.
 
 ## Highlights
 

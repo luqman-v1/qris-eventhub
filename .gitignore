@@ -7,3 +7,5 @@ notifications.db
 dist/
 coverage/
 *.local
+.vercel
+.env*.local

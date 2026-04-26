@@ -4,8 +4,8 @@
   "description": "Backend server for Android Notification Listener app",
   "type": "module",
   "scripts": {
-    "start": "node server.cjs",
-    "dev": "nodemon server.cjs",
+    "express:start": "node api/index.cjs",
+    "express:dev": "nodemon api/index.cjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",

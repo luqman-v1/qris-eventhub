@@ -2,11 +2,12 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
-const sqlite3 = require('sqlite3').verbose();
+// Use Turso wrapper instead of local sqlite3 to support Vercel deployment!
+const sqlite3 = require('../src/db/turso-sqlite.cjs');
 const path = require('path');
 const fs = require('fs');
-const qrisIntegration = require('./qris-integration');
-require('dotenv').config();
+const qrisIntegration = require('./qris-integration.cjs');
+require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -288,14 +289,19 @@ app.use((req, res) => {
     });
 });
 
-// Start server
-app.listen(PORT, () => {
-    console.log(`🚀 Notification Listener Backend running on port ${PORT}`);
-    console.log(`📊 Health check: http://localhost:${PORT}/health`);
-    console.log(`📋 Webhook endpoint: http://localhost:${PORT}/webhook`);
-    console.log(`🔧 Test endpoint: http://localhost:${PORT}/test`);
-    console.log(`📱 API Key: ${API_KEY === 'your-secret-api-key' ? 'Not configured (set API_KEY env variable)' : 'Configured'}`);
-});
+// Export app for Vercel Serverless
+module.exports = app;
+
+// Start server only if not running in Vercel
+if (require.main === module || !process.env.VERCEL) {
+    app.listen(PORT, () => {
+        console.log(`🚀 Notification Listener Backend running on port ${PORT}`);
+        console.log(`📊 Health check: http://localhost:${PORT}/health`);
+        console.log(`📋 Webhook endpoint: http://localhost:${PORT}/webhook`);
+        console.log(`🔧 Test endpoint: http://localhost:${PORT}/test`);
+        console.log(`📱 API Key: ${API_KEY === 'your-secret-api-key' ? 'Not configured (set API_KEY env variable)' : 'Configured'}`);
+    });
+}
 
 // Graceful shutdown
 process.on('SIGINT', () => {

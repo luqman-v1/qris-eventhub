@@ -1,4 +1,4 @@
-import { createClient } from '@libsql/client';
+import { createClient } from '@libsql/client/web';
 
 /**
  * Create a Turso/libSQL client wrapped in a D1-compatible interface.

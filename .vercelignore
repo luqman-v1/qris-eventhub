@@ -1,3 +1,26 @@
-# Express server files (not used on Vercel)
-server.cjs
-qris-integration.js
+# Express / legacy files (not used on Vercel)
+express-server.cjs
+qris-integration.cjs
+qris-converter.cjs
+
+# Test scripts (legacy, not vitest)
+test.cjs
+test-crc-debug.cjs
+test-crc.php
+test-qris.cjs
+test-qris-fixed.cjs
+test-integration.sh
+test-cloudflare.sh
+
+# Docker
+Dockerfile
+docker-compose.yml
+
+# Cloudflare
+wrangler.toml
+
+# Deploy scripts
+deploy.sh
+
+# Docs
+docs/

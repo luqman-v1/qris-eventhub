@@ -3,7 +3,6 @@
   "version": "1.0.0",
   "description": "Backend server for Android Notification Listener app",
   "type": "module",
-  "main": "server.cjs",
   "scripts": {
     "start": "node server.cjs",
     "dev": "nodemon server.cjs",

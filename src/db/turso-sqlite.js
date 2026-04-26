@@ -24,7 +24,12 @@ class Database {
         if (typeof params === 'function') {
             return { args: [], cb: params };
         }
-        return { args: params || [], cb: callback };
+        
+        // Turso's hrana-client does not support 'undefined'. It strictly requires 'null'.
+        // This causes "TypeError: Unsupported type of value" if Express passes undefined.
+        const normalizedArgs = (params || []).map(arg => arg === undefined ? null : arg);
+        
+        return { args: normalizedArgs, cb: callback };
     }
 
     run(sql, params, callback) {

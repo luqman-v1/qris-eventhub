@@ -1,156 +1,255 @@
 # QRIS EventHub
 
-Backend service for collecting Android notifications, storing them in SQLite, and matching QRIS payments for e‑commerce workflows.
+Backend service for collecting Android notifications, storing them in SQLite / Cloudflare D1, and matching QRIS payments for e‑commerce workflows.
 
-## Support This Project
-
-<p>
-  <a href="https://saweria.co/HiddenCyber">
-    <img src="https://asset.hiddencyber.online/donate-buttons/saweria.svg" alt="Donasi via Saweria" height="56">
-  </a>
-
-  <a href="https://support.hiddencyber.online">
-    <img src="https://asset.hiddencyber.online/donate-buttons/qris.svg" alt="Dukungan via QRIS" height="56">
-  </a>
-
-  <a href="https://ko-fi.com/hiddencyber">
-    <img src="https://asset.hiddencyber.online/donate-buttons/ko-fi.svg" alt="Ko-fi untuk HiddenCyber" height="56">
-  </a>
-
-  <a href="https://paypal.me/wimboro">
-    <img src="https://asset.hiddencyber.online/donate-buttons/paypal.svg" alt="Donasi via PayPal" height="56">
-  </a>
-</p>
 
 ## Highlights
-- Express API with webhook ingestion, device tracking, and basic analytics.
-- QRIS utilities to convert static codes, generate unique 3‑digit identifiers, and confirm WooCommerce payments.
-- SQLite persistence out of the box; Cloudflare D1 deployment supported via `src/worker.js`.
-- API-key enforcement, security headers, logging, and CORS enabled by default.
 
-## Architecture
-- **HTTP layer**: `server.js` exposes REST endpoints and middleware (Helmet, CORS, Morgan).
-- **Persistence**: Local SQLite database (`notifications.db`) created automatically with tables for notifications, devices, payment expectations, and unique amounts.
-- **Payment logic**: `qris-integration.js` wires QRIS routes, unique-amount generation, and WooCommerce callbacks.
-- **Worker build**: `src/worker.js` mirrors the API for Cloudflare Workers + D1. Cloudflare-specific instructions live in `README-CLOUDFLARE.md`.
+- Webhook ingestion for Android push notifications with device tracking and analytics.
+- QRIS utilities: convert static → dynamic codes, generate unique 3‑digit suffixes, and confirm payments.
+- **Callback signature** — outgoing payment callbacks include an `X-QRIS-Signature` header (SHA-256) for tamper-proof verification.
+- SQLite persistence (Express) or Cloudflare D1 (Worker) out of the box.
+- API-key enforcement, security headers, logging, and CORS enabled by default.
+- **66 unit tests** covering helpers, handlers, QRIS converter, payment matching, and callback signatures.
+
+## Project Structure
+
+```
+src/
+├── worker.js                    ← Cloudflare Worker entry point + router
+├── constants.js                 ← CORS headers, TTL, pool size config
+├── helpers.js                   ← jsonResponse(), jsonError()
+├── qris-converter.js            ← Static → dynamic QRIS conversion + CRC16
+│
+├── db/
+│   ├── init.js                  ← CREATE TABLE IF NOT EXISTS (all 4 tables)
+│   ├── device.js                ← upsertDevice()
+│   ├── notification.js          ← insertNotification(), getNotifications(), getStats()
+│   └── payment.js               ← createPaymentExpectation(), reserveUniqueAmount(), etc.
+│
+├── handlers/
+│   ├── notification.js          ← /health /webhook /test /notifications /devices /stats
+│   └── qris.js                  ← /qris/convert /validate /generate-for-order /unique-amount
+│
+└── services/
+    └── payment-matcher.js       ← checkPaymentMatch(), signature generation, callback firing
+```
 
 ## Getting Started
-1. **Install**
-   ```bash
-   npm install
-   ```
-2. **Configure environment**
-   ```env
-   PORT=3000
-   API_KEY=change-me
-   ```
-   Save the file as `.env` in the project root. If `API_KEY` equals `your-secret-api-key`, authentication is skipped.
-3. **Run**
-   ```bash
-   npm run dev   # nodemon reloads on changes
-   npm start     # production mode
-   ```
-   The API listens on `http://localhost:${PORT}`. SQLite data is stored beside `server.js` as `notifications.db`.
 
-Optional: `docker-compose.yml` and `Dockerfile` are provided for container deployments; set environment variables in the compose file or runtime environment.
+### 1. Install
 
-### Run with Docker Compose
 ```bash
-export API_KEY=change-me          # required; used by clients
-docker compose up -d              # builds and starts qris-eventhub + optional nginx profile
-# tail logs
+npm install
+```
+
+### 2. Configure environment
+
+Copy `.env.example` to `.env` and edit:
+
+```env
+PORT=3000
+API_KEY=change-me
+CALLBACK_SECRET=generate-a-long-random-string-here
+```
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `PORT` | Express server port | `3000` |
+| `API_KEY` | API authentication key (`X-API-Key` header) | `your-secret-api-key` (auth skipped) |
+| `CALLBACK_SECRET` | SHA-256 secret for signing `X-QRIS-Signature` on payment callbacks | _(none — callbacks sent unsigned)_ |
+| `DB_PATH` | SQLite database file path (Express only) | `./notifications.db` |
+
+### 3. Run
+
+```bash
+npm run dev   # nodemon — live reload
+npm start     # production
+```
+
+### 4. Run tests
+
+```bash
+npm test              # single run (vitest)
+npm run test:watch    # watch mode
+npm run test:coverage # with coverage report
+```
+
+### Docker
+
+```bash
+export API_KEY=change-me
+export CALLBACK_SECRET=your-random-secret
+docker compose up -d
 docker compose logs -f qris-eventhub
 ```
-- The service binds to `localhost:3000` by default (`PORT` can be overridden via environment).
-- Notification data persists in the named volume `qris-eventhub-data`.
-- Enable the reverse proxy with `docker compose --profile production up -d`.
+
+## Cloudflare Workers Deployment
+
+### Environment variables
+
+Set secrets via Wrangler CLI:
+
+```bash
+wrangler secret put API_KEY
+wrangler secret put CALLBACK_SECRET
+```
+
+Or add to `wrangler.toml` under `[vars]` (not recommended for secrets):
+
+```toml
+[vars]
+API_KEY = "change-me"
+CALLBACK_SECRET = "your-random-secret"
+```
+
+### Deploy
+
+```bash
+npm run cf:dev      # local dev with Wrangler
+npm run cf:deploy   # deploy to Cloudflare
+```
 
 ## API Overview
+
+> Provide `X-API-Key: ${API_KEY}` on every call except `/health` when the key is configured.
+
+### Core endpoints
+
 | Purpose | Method & Path | Notes |
 |---------|---------------|-------|
 | Health  | `GET /health` | Unauthenticated heartbeat. |
-| Webhook | `POST /webhook` | Primary notification ingest. Requires payload with `deviceId` and `packageName`. |
+| Webhook | `POST /webhook` | Notification ingest. Requires `deviceId` and `packageName`. |
 | Test    | `POST /test` | Echo endpoint for integration checks. |
 | Data    | `GET /notifications` | Supports `device_id`, `limit`, and `offset` query params. |
 |         | `GET /devices` | Lists devices ordered by `last_seen`. |
 |         | `GET /stats` | Aggregate counts and top applications. |
 
-> Provide `X-API-Key: ${API_KEY}` on every call except `/health` when the key is configured.
+### QRIS endpoints
 
-## QRIS & WooCommerce Flow
-1. **Register expectation** via `POST /woocommerce/payment-webhook`.
-2. **Generate QR** with `POST /qris/generate-for-order` or convert an existing static code using `POST /qris/convert`. Unique 3-digit suffixes (001‑200) help match payments.
-3. **Receive bank push notifications** through `/webhook`; matching logic (`checkPaymentMatch`) marks expectations as completed and optionally POSTs to `callbackUrl`.
-4. **Poll status or confirm amount** using the `/woocommerce/payment-status/:orderRef` and `/woocommerce/confirm-amount/:orderRef/:expectedAmount` helpers.
+| Purpose | Method & Path | Notes |
+|---------|---------------|-------|
+| Convert | `POST /qris/convert` | Convert static QRIS to dynamic with amount. |
+| Validate | `POST /qris/validate` | Validate QRIS format. |
+| Generate for order | `POST /qris/generate-for-order` | Generate dynamic QRIS + unique amount for payment tracking. |
+| Unique amount | `GET /qris/unique-amount/:orderRef` | Retrieve unique amount for an order. |
 
-Additional QRIS tools:
-- `POST /qris/validate` ensures a QR string is correctly formatted.
-- `GET /qris/unique-amount/:orderRef` retrieves the active unique amount for an order.
+## Payment Flow
+
+```
+1. Your backend  →  POST /qris/generate-for-order
+                    {
+                      staticQRIS, originalAmount, orderRef,
+                      callbackUrl: "https://your-api.com/payment-confirmed"
+                    }
+                    ← Returns dynamic QRIS + combined amount
+
+2. Customer scans QR code and pays via banking app
+
+3. Android Notification Listener  →  POST /webhook
+                                     { deviceId, packageName, amountDetected, ... }
+
+4. Worker matches payment automatically
+   → Marks payment_expectations.status = 'completed'
+   → POSTs to callbackUrl with X-QRIS-Signature header
+
+5. Your backend verifies signature and updates order status
+```
+
+## Callback Signature Verification
+
+When `CALLBACK_SECRET` is configured, every outgoing payment callback includes an `X-QRIS-Signature` header containing a SHA-256 hex digest.
+
+### Signature format
+
+```
+SHA-256( amount_detected + order_reference + completed_at + CALLBACK_SECRET )
+```
+
+### Verify in Laravel (PHP)
+
+```php
+$signature = $request->header('X-QRIS-Signature');
+$secret    = config('services.qris.callback_secret');
+
+$expected = hash('sha256',
+    $request->input('amount_detected')
+    . $request->input('order_reference')
+    . $request->input('completed_at')
+    . $secret
+);
+
+if (! hash_equals($expected, $signature)) {
+    return response()->json(['error' => 'Invalid signature'], 400);
+}
+```
+
+### Verify in Node.js
+
+```javascript
+import { createHash } from 'crypto';
+
+const secret    = process.env.CALLBACK_SECRET;
+const signature = req.headers['x-qris-signature'];
+
+const expected = createHash('sha256')
+  .update(req.body.amount_detected + req.body.order_reference + req.body.completed_at + secret)
+  .digest('hex');
+
+if (expected !== signature) {
+  return res.status(400).json({ error: 'Invalid signature' });
+}
+```
+
+### Callback payload example
+
+```json
+{
+  "event": "payment.completed",
+  "order_reference": "ORDER-20240426-001",
+  "status": "completed",
+  "amount_detected": "50075",
+  "expected_amount": "50075",
+  "original_amount": "50000",
+  "unique_amount": "075",
+  "match_type": "amount_only_match",
+  "completed_at": "2026-04-26T15:30:00.000Z"
+}
+```
 
 ## Scripts & Tooling
+
 | Script | Description |
 |--------|-------------|
+| `npm test` | Run all unit tests (Vitest). |
+| `npm run test:watch` | Watch mode for development. |
 | `npm run dev` | Start Express server with live reload. |
 | `npm start` | Start Express server. |
-| `npm run cf:dev` / `npm run cf:deploy` | Cloudflare Wrangler shortcuts (see `README-CLOUDFLARE.md`). |
-| `deploy.sh`, `test-integration.sh`, `test-qris*.js` | Utilities for manual testing and deployment automation. |
+| `npm run cf:dev` | Cloudflare Wrangler local dev. |
+| `npm run cf:deploy` | Deploy to Cloudflare Workers. |
 
 ## Database Schema
-Tables are provisioned automatically on startup; schema is documented in `schema.sql`:
-- `notifications`: all received notification payloads.
-- `devices`: device metadata and notification counts.
-- `payment_expectations`: outstanding WooCommerce payment intents.
-- `unique_amounts`: pool of reserved three-digit suffixes with expiry handling.
+
+Tables are provisioned automatically on startup (see `src/db/init.js` and `schema.sql`):
+
+| Table | Purpose |
+|-------|---------|
+| `notifications` | All received notification payloads. |
+| `devices` | Device metadata and notification counts. |
+| `payment_expectations` | Pending/completed payment intents with `callback_url`. |
+| `unique_amounts` | Pool of reserved 3-digit suffixes (001–200) with expiry. |
 
 ## Troubleshooting
-- Ensure the Android client sends `deviceId` and `packageName`; missing fields result in `400`.
-- SQLite locking issues usually stem from concurrent writers—restart the service or move to an external database if needed.
-- For Cloudflare D1-specific issues or deployment guidance, consult `docs/deployment-cloudflare.md`.
 
-## Next Steps
-- Connect the Android Notification Listener app to `/webhook` and monitor `/notifications`.
-- Integrate WooCommerce by pointing the plugin to this backend and supplying matching API keys.
-- When ready for serverless deployment, follow the Cloudflare guide to run the Worker version.
+- **Missing `deviceId` or `packageName`** → `400 Bad Request` from `/webhook`.
+- **`D1_TYPE_ERROR: Type 'undefined'`** → A field passed to D1 `.bind()` is `undefined` instead of `null`. All optional fields are now coerced with `?? null`.
+- **Callback not received** → Check that `callbackUrl` was provided in the `/qris/generate-for-order` request and that `CALLBACK_SECRET` matches on both sides.
+- **Signature mismatch** → Ensure both Worker and receiver use the exact same secret string and the same field concatenation order: `amount_detected + order_reference + completed_at + secret`.
 
 ## Additional Documentation
-- Detailed docs live under `docs/`:
-  - `docs/index.md` – full table of contents.
-  - `docs/architecture.md` – module breakdown and data flow.
-  - `docs/api.md` – endpoint reference with payload examples.
-  - `docs/local-development.md` – environment setup, commands, and troubleshooting.
-  - `docs/deployment.md` – hosting strategies and operational guidance.
-  - `docs/deployment-cloudflare.md` – Worker-specific steps and best practices.
-| `API_KEY` | API authentication key | `your-secret-api-key` |
-| `DB_PATH` | SQLite database path | `./notifications.db` |
 
-## Security
-
-- Enable API key authentication in production
-- Use HTTPS in production
-- Consider rate limiting for high-traffic scenarios
-- Regularly backup the SQLite database
-- Monitor server logs for suspicious activity
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Database locked error**
-   - Ensure only one server instance is running
-   - Check file permissions for `notifications.db`
-
-2. **API key errors**
-   - Verify `.env` file configuration
-   - Check `X-API-Key` header in requests
-
-3. **CORS issues**
-   - Modify CORS configuration in `server.js`
-   - Check browser developer tools for CORS errors
-
-### Logs
-
-Server logs include:
-- HTTP request details (via Morgan)
-- Database operations
-- Error messages
-- Notification processing info
+- `docs/index.md` – full table of contents.
+- `docs/architecture.md` – module breakdown and data flow.
+- `docs/api.md` – endpoint reference with payload examples.
+- `docs/local-development.md` – environment setup, commands, and troubleshooting.
+- `docs/deployment-cloudflare.md` – Worker-specific steps and best practices.

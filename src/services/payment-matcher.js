@@ -3,6 +3,28 @@ import {
   markExpectationCompleted,
 } from '../db/payment.js';
 
+// ─── Signature ─────────────────────────────────────────────────────────────
+
+/**
+ * Generate a SHA-256 hex signature for the callback payload.
+ * String format (mirrors Lynk.id convention):
+ *   amountDetected + orderReference + completedAt + secret
+ *
+ * @param {string} amountDetected
+ * @param {string} orderReference
+ * @param {string} completedAt   ISO timestamp
+ * @param {string} secret        CALLBACK_SECRET from env
+ * @returns {Promise<string>}    hex string
+ */
+export async function generateCallbackSignature(amountDetected, orderReference, completedAt, secret) {
+  const message = amountDetected + orderReference + completedAt + secret;
+  const encoded = new TextEncoder().encode(message);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', encoded);
+  return Array.from(new Uint8Array(hashBuffer))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
 // ─── Public API ────────────────────────────────────────────────────────────
 
 /**
@@ -14,7 +36,12 @@ import {
  * @param {D1Database} db
  * @param {{ text: string, title: string, bigText?: string, amountDetected: string }} notification
  */
-export async function checkPaymentMatch(db, { text, title, bigText, amountDetected }) {
+/**
+ * @param {D1Database} db
+ * @param {{ text: string, title: string, bigText?: string, amountDetected: string }} notification
+ * @param {string|undefined} callbackSecret  env.CALLBACK_SECRET
+ */
+export async function checkPaymentMatch(db, { text, title, bigText, amountDetected }, callbackSecret) {
   const expectations = await getPendingExpectationsByAmount(db, amountDetected);
 
   if (expectations.length === 0) {
@@ -39,7 +66,7 @@ export async function checkPaymentMatch(db, { text, title, bigText, amountDetect
     return;
   }
 
-  await completePayment(db, matched, { amountDetected, matchType });
+  await completePayment(db, matched, { amountDetected, matchType }, callbackSecret);
 }
 
 // ─── Internal ──────────────────────────────────────────────────────────────
@@ -75,14 +102,14 @@ function resolveMatch(expectations, { text, title, bigText, amountDetected }) {
  * @param {object} expectation
  * @param {{ amountDetected: string, matchType: string }} meta
  */
-async function completePayment(db, expectation, { amountDetected, matchType }) {
+async function completePayment(db, expectation, { amountDetected, matchType }, callbackSecret) {
   const completedAt = new Date().toISOString();
 
   await markExpectationCompleted(db, expectation.id, completedAt);
   console.log(`✅ Payment completed for order ${expectation.order_reference}`);
 
   if (expectation.callback_url) {
-    await fireCallback(expectation.callback_url, {
+    const payload = {
       event:           'payment.completed',
       order_reference: expectation.order_reference,
       status:          'completed',
@@ -92,7 +119,8 @@ async function completePayment(db, expectation, { amountDetected, matchType }) {
       unique_amount:   expectation.unique_amount,
       match_type:      matchType,
       completed_at:    completedAt,
-    });
+    };
+    await fireCallback(expectation.callback_url, payload, callbackSecret);
   }
 }
 
@@ -102,13 +130,26 @@ async function completePayment(db, expectation, { amountDetected, matchType }) {
  * @param {string} url
  * @param {object} payload
  */
-async function fireCallback(url, payload) {
+async function fireCallback(url, payload, callbackSecret) {
   try {
+    const headers = { 'Content-Type': 'application/json' };
+
+    if (callbackSecret) {
+      headers['X-QRIS-Signature'] = await generateCallbackSignature(
+        payload.amount_detected,
+        payload.order_reference,
+        payload.completed_at,
+        callbackSecret,
+      );
+    } else {
+      console.warn('⚠️  CALLBACK_SECRET not set — callback sent without signature');
+    }
+
     console.log(`📡 Firing callback → ${url}`);
     const res = await fetch(url, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify(payload),
+      method: 'POST',
+      headers,
+      body:   JSON.stringify(payload),
     });
     console.log(`📡 Callback response: ${res.status} ${res.statusText}`);
   } catch (err) {

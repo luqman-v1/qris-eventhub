@@ -121,6 +121,7 @@ describe('handlers/notification', () => {
       expect(matchSpy).toHaveBeenCalledWith(
         {},
         expect.objectContaining({ amountDetected: '50075' }),
+        undefined, // env.CALLBACK_SECRET not set in test env
       );
     });
 

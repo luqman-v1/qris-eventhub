@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { checkPaymentMatch } from '../src/services/payment-matcher.js';
+import { checkPaymentMatch, generateCallbackSignature } from '../src/services/payment-matcher.js';
 import * as paymentDb from '../src/db/payment.js';
 
 // ─── DB mock helpers ───────────────────────────────────────────────────────
@@ -134,5 +134,70 @@ describe('payment-matcher / checkPaymentMatch()', () => {
       bigText:        '',
       amountDetected: '50075',
     })).resolves.toBeUndefined();
+  });
+
+  it('sends X-QRIS-Signature header when CALLBACK_SECRET is configured', async () => {
+    const expectation = makePendingExpectation({ callback_url: 'https://merchant.example.com/cb' });
+    vi.spyOn(paymentDb, 'getPendingExpectationsByAmount').mockResolvedValue([expectation]);
+    vi.spyOn(paymentDb, 'markExpectationCompleted').mockResolvedValue();
+
+    let capturedHeaders;
+    vi.spyOn(global, 'fetch').mockImplementation(async (url, opts) => {
+      capturedHeaders = opts.headers;
+      return { status: 200, statusText: 'OK' };
+    });
+
+    await checkPaymentMatch({}, {
+      text: 'ORDER-001', title: 'QRIS', bigText: '', amountDetected: '50075',
+    }, 'my-secret-key');
+
+    expect(capturedHeaders['X-QRIS-Signature']).toBeDefined();
+    expect(capturedHeaders['X-QRIS-Signature']).toHaveLength(64); // SHA-256 hex
+  });
+
+  it('does NOT send X-QRIS-Signature when CALLBACK_SECRET is not set', async () => {
+    const expectation = makePendingExpectation({ callback_url: 'https://merchant.example.com/cb' });
+    vi.spyOn(paymentDb, 'getPendingExpectationsByAmount').mockResolvedValue([expectation]);
+    vi.spyOn(paymentDb, 'markExpectationCompleted').mockResolvedValue();
+
+    let capturedHeaders;
+    vi.spyOn(global, 'fetch').mockImplementation(async (url, opts) => {
+      capturedHeaders = opts.headers;
+      return { status: 200, statusText: 'OK' };
+    });
+
+    await checkPaymentMatch({}, {
+      text: 'ORDER-001', title: 'QRIS', bigText: '', amountDetected: '50075',
+    }); // no secret
+
+    expect(capturedHeaders['X-QRIS-Signature']).toBeUndefined();
+  });
+});
+
+// ─── generateCallbackSignature ─────────────────────────────────────────────
+
+describe('generateCallbackSignature()', () => {
+  it('returns a 64-char lowercase hex string (SHA-256)', async () => {
+    const sig = await generateCallbackSignature('50075', 'ORDER-001', '2026-04-26T10:00:00.000Z', 'secret');
+    expect(sig).toHaveLength(64);
+    expect(sig).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('is deterministic for the same inputs', async () => {
+    const a = await generateCallbackSignature('50075', 'ORDER-001', '2026-04-26T10:00:00.000Z', 'secret');
+    const b = await generateCallbackSignature('50075', 'ORDER-001', '2026-04-26T10:00:00.000Z', 'secret');
+    expect(a).toBe(b);
+  });
+
+  it('produces a different signature when the secret changes', async () => {
+    const a = await generateCallbackSignature('50075', 'ORDER-001', '2026-04-26T10:00:00.000Z', 'secret-A');
+    const b = await generateCallbackSignature('50075', 'ORDER-001', '2026-04-26T10:00:00.000Z', 'secret-B');
+    expect(a).not.toBe(b);
+  });
+
+  it('produces a different signature when amount changes', async () => {
+    const a = await generateCallbackSignature('50075', 'ORDER-001', '2026-04-26T10:00:00.000Z', 'secret');
+    const b = await generateCallbackSignature('99999', 'ORDER-001', '2026-04-26T10:00:00.000Z', 'secret');
+    expect(a).not.toBe(b);
   });
 });

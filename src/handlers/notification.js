@@ -66,7 +66,7 @@ export async function handleWebhook(request, env, ctx) {
 
   // Payment matching runs in background — doesn't block the response
   if (amountDetected) {
-    const matchTask = checkPaymentMatch(env.DB, { text, title, bigText, amountDetected })
+    const matchTask = checkPaymentMatch(env.DB, { text, title, bigText, amountDetected }, env.CALLBACK_SECRET)
       .catch(err => console.error('Background payment match error:', err));
 
     ctx?.waitUntil ? ctx.waitUntil(matchTask) : await matchTask;
